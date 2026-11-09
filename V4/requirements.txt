@@ -1,0 +1,13 @@
+streamlit
+pandas
+numpy
+xgboost
+scikit-learn
+joblib
+openpyxl
+statsmodels
+akshare
+openai
+plotly
+python-dotenv
+pandas-datareader
