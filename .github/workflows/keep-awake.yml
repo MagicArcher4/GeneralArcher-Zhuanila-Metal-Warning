@@ -1,0 +1,18 @@
+name: Streamlit Keep Awake
+
+on:
+  schedule:
+    # UTC时间的 8:00 和 19:00（北京时间 16:00 和 凌晨 3:00）
+    # 间隔分别为 11 小时和 13 小时，确保不会超过 12 小时的休眠极限
+    - cron: '0 8,19 * * *'
+  workflow_dispatch: # 允许你随时在网页上手动点击测试
+
+jobs:
+  ping-app:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Streamlit App
+        run: |
+          echo "正在向最新的链接发送保活请求..."
+          # 已经替换为你提供的最新 URL
+          curl -s -o /dev/null -w "HTTP Status: %{http_code}\n" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" https://generalarcher-zhuanila-metal-warning1.streamlit.app/
