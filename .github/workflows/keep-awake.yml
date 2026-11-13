@@ -3,87 +3,43 @@ name: Streamlit Keep Awake
 
 on:
   schedule:
-    # 每6小时执行一次（UTC）
-    - cron: '0 */6 * * *'
+    # GitHub Actions 使用 UTC；每 6 小时访问一次
+    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 jobs:
   ping-app:
     runs-on: ubuntu-latest
+    timeout-minutes: 2
+
     steps:
-      - name: Wake Streamlit App
+      - name: Wake and check Streamlit app
         shell: bash
         run: |
           set -euo pipefail
 
           APP_URL="https://generalarcher-zhuanila-metal-warning1.streamlit.app"
-          COOKIE_JAR="$(mktemp)"
-          PAGE_BODY="$(mktemp)"
-          trap 'rm -f "$COOKIE_JAR" "$PAGE_BODY"' EXIT
 
-          echo "Step 1: Getting CSRF token..."
+          echo "Pinging Streamlit app: ${APP_URL}"
 
-          HEADERS=$(curl -sS -D - -o /dev/null \
-            -c "$COOKIE_JAR" \
-            "$APP_URL/api/v2/app/status")
+          HTTP_CODE="$(curl \
+            --silent \
+            --show-error \
+            --location \
+            --max-redirs 10 \
+            --connect-timeout 15 \
+            --max-time 60 \
+            --output /dev/null \
+            --write-out "%{http_code}" \
+            --user-agent "Mozilla/5.0 (compatible; GitHubActions-KeepAlive/1.0)" \
+            "${APP_URL}/")"
 
-          CSRF_TOKEN=$(printf '%s\n' "$HEADERS" |
-            awk 'tolower($1)=="x-csrf-token:" {
-              gsub("\r","",$2); token=$2
-            } END {print token}')
+          echo "Final HTTP status: ${HTTP_CODE}"
 
-          if [ -z "$CSRF_TOKEN" ]; then
-            echo "ERROR: CSRF token not found"
+          if [[ "${HTTP_CODE}" =~ ^2[0-9][0-9]$ ]]; then
+            echo "SUCCESS: Streamlit app responded successfully."
+          else
+            echo "ERROR: Streamlit app returned HTTP ${HTTP_CODE}."
             exit 1
           fi
 
-          echo "Step 2: Sending resume request..."
-
-          MACHINE_ID=$(cat /proc/sys/kernel/random/uuid)
-
-          RESUME_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
-            -X POST \
-            -b "$COOKIE_JAR" \
-            -c "$COOKIE_JAR" \
-            -H "x-csrf-token: $CSRF_TOKEN" \
-            -H "x-streamlit-machine-id: $MACHINE_ID" \
-            -H "Origin: $APP_URL" \
-            -H "Referer: $APP_URL/" \
-            "$APP_URL/api/v2/app/resume")
-
-          echo "Resume HTTP status: $RESUME_CODE"
-
-          if [[ ! "$RESUME_CODE" =~ ^2[0-9][0-9]$ ]]; then
-            echo "ERROR: Resume request failed"
-            exit 1
-          fi
-
-          
-
-echo "Step 3: Checking Streamlit status..."
-
-for i in {1..12}; do
-  STATUS_CODE=$(curl -sS \
-    --max-time 15 \
-    -b "$COOKIE_JAR" \
-    -c "$COOKIE_JAR" \
-    -o "$PAGE_BODY" \
-    -w "%{http_code}" \
-    "$APP_URL/api/v2/app/status")
-
-  echo "Status API HTTP: $STATUS_CODE"
-
-  if [ "$STATUS_CODE" = "200" ]; then
-    echo "Status API response:"
-    cat "$PAGE_BODY"
-    echo ""
-    echo "SUCCESS: Status API is responding."
-    exit 0
-  fi
-
-  echo "Waiting for Streamlit... attempt $i/12"
-  sleep 10
-done
-
-echo "ERROR: Status API did not respond successfully."
-exit 1
