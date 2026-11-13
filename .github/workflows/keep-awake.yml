@@ -1,17 +1,81 @@
+
 name: Streamlit Keep Awake
 
 on:
   schedule:
-    # UTC时间的 03:00, 13:00, 17:00（对应北京时间 11:00, 21:00, 次日01:00）
-    # 间隔分别为 10小时、10小时、4小时，完美避开12小时休眠限制
-    - cron: '0 3,13,17 * * *'
-  workflow_dispatch: # 允许你随时在网页上手动点击测试
+    # 每6小时执行一次（UTC）
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
 
 jobs:
   ping-app:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Streamlit App
+      - name: Wake Streamlit App
+        shell: bash
         run: |
-          echo "正在向最新链接发送保活请求..."
-          curl -s -o /dev/null -w "HTTP Status: %{http_code}\n" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" https://generalarcher-zhuanila-metal-warning1.streamlit.app/
+          set -euo pipefail
+
+          APP_URL="https://generalarcher-zhuanila-metal-warning1.streamlit.app"
+          COOKIE_JAR="$(mktemp)"
+          PAGE_BODY="$(mktemp)"
+          trap 'rm -f "$COOKIE_JAR" "$PAGE_BODY"' EXIT
+
+          echo "Step 1: Getting CSRF token..."
+
+          HEADERS=$(curl -sS -D - -o /dev/null \
+            -c "$COOKIE_JAR" \
+            "$APP_URL/api/v2/app/status")
+
+          CSRF_TOKEN=$(printf '%s\n' "$HEADERS" |
+            awk 'tolower($1)=="x-csrf-token:" {
+              gsub("\r","",$2); token=$2
+            } END {print token}')
+
+          if [ -z "$CSRF_TOKEN" ]; then
+            echo "ERROR: CSRF token not found"
+            exit 1
+          fi
+
+          echo "Step 2: Sending resume request..."
+
+          MACHINE_ID=$(cat /proc/sys/kernel/random/uuid)
+
+          RESUME_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -b "$COOKIE_JAR" \
+            -c "$COOKIE_JAR" \
+            -H "x-csrf-token: $CSRF_TOKEN" \
+            -H "x-streamlit-machine-id: $MACHINE_ID" \
+            -H "Origin: $APP_URL" \
+            -H "Referer: $APP_URL/" \
+            "$APP_URL/api/v2/app/resume")
+
+          echo "Resume HTTP status: $RESUME_CODE"
+
+          if [[ ! "$RESUME_CODE" =~ ^2[0-9][0-9]$ ]]; then
+            echo "ERROR: Resume request failed"
+            exit 1
+          fi
+
+          echo "Step 3: Checking app recovery..."
+
+          for i in {1..12}; do
+            sleep 10
+
+            HTTP_CODE=$(curl -sS -L \
+              -o "$PAGE_BODY" \
+              -w "%{http_code}" \
+              "$APP_URL/")
+
+            if [ "$HTTP_CODE" = "200" ] && \
+              ! grep -qi "This app has gone to sleep due to inactivity" "$PAGE_BODY"; then
+              echo "SUCCESS: Streamlit app is responding!"
+              exit 0
+            fi
+
+            echo "Waiting for app... attempt $i/12"
+          done
+
+          echo "ERROR: App did not recover within 120 seconds"
+          exit 1
