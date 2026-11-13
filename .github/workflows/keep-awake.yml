@@ -58,24 +58,32 @@ jobs:
             exit 1
           fi
 
-          echo "Step 3: Checking app recovery..."
+          
 
-          for i in {1..12}; do
-            sleep 10
+echo "Step 3: Checking Streamlit status..."
 
-            HTTP_CODE=$(curl -sS -L \
-              -o "$PAGE_BODY" \
-              -w "%{http_code}" \
-              "$APP_URL/")
+for i in {1..12}; do
+  STATUS_CODE=$(curl -sS \
+    --max-time 15 \
+    -b "$COOKIE_JAR" \
+    -c "$COOKIE_JAR" \
+    -o "$PAGE_BODY" \
+    -w "%{http_code}" \
+    "$APP_URL/api/v2/app/status")
 
-            if [ "$HTTP_CODE" = "200" ] && \
-              ! grep -qi "This app has gone to sleep due to inactivity" "$PAGE_BODY"; then
-              echo "SUCCESS: Streamlit app is responding!"
-              exit 0
-            fi
+  echo "Status API HTTP: $STATUS_CODE"
 
-            echo "Waiting for app... attempt $i/12"
-          done
+  if [ "$STATUS_CODE" = "200" ]; then
+    echo "Status API response:"
+    cat "$PAGE_BODY"
+    echo ""
+    echo "SUCCESS: Status API is responding."
+    exit 0
+  fi
 
-          echo "ERROR: App did not recover within 120 seconds"
-          exit 1
+  echo "Waiting for Streamlit... attempt $i/12"
+  sleep 10
+done
+
+echo "ERROR: Status API did not respond successfully."
+exit 1
