@@ -1,45 +1,82 @@
-
 name: Streamlit Keep Awake
 
 on:
   schedule:
-    # GitHub Actions 使用 UTC；每 6 小时访问一次
+    # 每 6 小时运行一次（UTC）
     - cron: "0 */6 * * *"
   workflow_dispatch:
 
 jobs:
-  ping-app:
+  keep-awake:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 8
 
     steps:
-      - name: Wake and check Streamlit app
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Playwright
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Open Streamlit app and wake it if needed
         shell: bash
         run: |
-          set -euo pipefail
+          python - <<'PY'
+          import asyncio
+          import re
+          from playwright.async_api import async_playwright
 
-          APP_URL="https://generalarcher-zhuanila-metal-warning1.streamlit.app"
+          APP_URL = "https://generalarcher-zhuanila-metal-warning1.streamlit.app/"
 
-          echo "Pinging Streamlit app: ${APP_URL}"
+          async def main():
+              async with async_playwright() as p:
+                  browser = await p.chromium.launch(headless=True)
+                  page = await browser.new_page(
+                      viewport={"width": 1440, "height": 1000}
+                  )
 
-          HTTP_CODE="$(curl \
-            --silent \
-            --show-error \
-            --location \
-            --max-redirs 10 \
-            --connect-timeout 15 \
-            --max-time 60 \
-            --output /dev/null \
-            --write-out "%{http_code}" \
-            --user-agent "Mozilla/5.0 (compatible; GitHubActions-KeepAlive/1.0)" \
-            "${APP_URL}/")"
+                  print(f"Opening: {APP_URL}")
+                  response = await page.goto(
+                      APP_URL,
+                      wait_until="domcontentloaded",
+                      timeout=120_000,
+                  )
 
-          echo "Final HTTP status: ${HTTP_CODE}"
+                  if response:
+                      print(f"Initial HTTP status: {response.status}")
 
-          if [[ "${HTTP_CODE}" =~ ^2[0-9][0-9]$ ]]; then
-            echo "SUCCESS: Streamlit app responded successfully."
-          else
-            echo "ERROR: Streamlit app returned HTTP ${HTTP_CODE}."
-            exit 1
-          fi
+                  # Allow the page's JavaScript and Streamlit session setup to run.
+                  await page.wait_for_timeout(8000)
 
+                  wake_button = page.get_by_role(
+                      "button",
+                      name=re.compile(r"get this app back up", re.IGNORECASE),
+                  )
+
+                  if await wake_button.count() > 0:
+                      print("Sleeping page detected; clicking the wake-up button.")
+                      await wake_button.first.click(timeout=20_000)
+                      await page.wait_for_timeout(60_000)
+                  else:
+                      print("No wake-up button detected; checking the loaded page.")
+                      await page.wait_for_timeout(15_000)
+
+                  body_text = await page.locator("body").inner_text()
+                  if "This app has gone to sleep due to inactivity" in body_text:
+                      raise RuntimeError(
+                          "The app is still showing the sleep page after the wake-up attempt."
+                      )
+
+                  print("Browser visit completed.")
+                  print(f"Final page title: {await page.title()}")
+                  print(f"Final URL: {page.url}")
+
+                  await browser.close()
+
+          asyncio.run(main())
+          PY
